@@ -18,6 +18,7 @@ from ginga.AstroImage import AstroImage
 from ginga.canvas.CanvasObject import drawCatalog
 from ginga.web.jupyterw.ImageViewJpw import EnhancedCanvasView
 from ginga.util.wcs import raDegToString, decDegToString
+from ginga.RGBImage import RGBImage
 
 __all__ = ['ImageWidget']
 
@@ -27,6 +28,7 @@ ALLOWED_CURSOR_LOCATIONS = ['top', 'bottom', None]
 # List of marker names that are for internal use only
 RESERVED_MARKER_SET_NAMES = ['all']
 
+ASTROWIDGET_VERSION = 'czw-20190802'
 
 class ImageWidget(ipyw.VBox):
     """
@@ -484,11 +486,82 @@ class ImageWidget(ipyw.VBox):
             _marker['type'] = 'point'
             _marker['style'] = 'cross'
             self._marker = functools.partial(self.dc.Point, **_marker)
+        elif marker_type == 'alphaMask':
+            _marker['type'] = 'image'
+            _marker['rgbData'] = self.mask_plane_to_rgb(_marker)
+            _marker['args'] = [0, 0, _marker['rgbData']]
+            self._marker = functools.partial(self.dc.Image, *_marker['args'])
         else:  # TODO: Implement more shapes
             raise NotImplementedError(
                 'Marker type "{}" not supported'.format(marker_type))
         # Only set this once we have successfully created a marker
         self._marker_dict = val
+
+    def mask_plane_to_rgb(self, alphaMaskDict):
+        """
+        Convert dictionary values to input values of ginga `Image`
+        class.
+
+        Parameters
+        ----------
+        alphaMaskDict : `dict` of values:
+            data : `numpy.ndarray`
+                Image data containing mask plane values.
+            maskValue : `int`
+                Value in ``data`` to construct mask.
+            maskColor : `str`
+                ginga color name.
+            maskAlpha : `float`
+
+        Returns
+        -------
+        rgbaData : `RGBImage`
+            Color image (RGBA) to add to canvas.
+
+        Notes
+        -----
+        Based on ginga's `TVMask` and `masktorgb` methods.
+
+        ginga.util.dp.masktorgb
+        ginga.rv.plugins.TVMask
+        """
+        from ginga import colors
+
+        data = alphaMaskDict.get('data', None)
+        #        if type(data) != numpy.ndarray:
+        #            data = None
+        if data is None:
+            raise RuntimeError(
+                "No data image supplied of known type.")
+        maskValue = alphaMaskDict.get('maskValue', 1)
+        maskColor = alphaMaskDict.get('maskColor', 'blue')
+        maskAlpha = alphaMaskDict.get('maskAlpha', 0.5)
+
+        height, width = data.shape
+        r, g, b = colors.lookup_color(maskColor)
+        rgbaData = RGBImage(data_np=np.zeros((height, width, 4),
+                                             dtype=np.uint8))
+        self.logger.debug("CZW: Pre value check.")
+        toMask = data & maskValue
+        self.logger.debug("CZW: Post value check.")
+        R = rgbaData.get_slice('R')
+        G = rgbaData.get_slice('G')
+        B = rgbaData.get_slice('B')
+        A = rgbaData.get_slice('A')
+        self.logger.debug("CZW: Post slice.")
+        R[:] = 0
+        B[:] = 0
+        A[:] = 0
+        self.logger.debug("CZW: Post null.")
+        #        rgbaData.get_slice('R')[toMask] = int(r * 255)
+        # CZW: Doing this with 'toMask' as the indices is super slow.
+        G[:] = toMask * int(g * 255)
+        self.logger.debug("CZW: Post g check.")
+        #        rgbaData.get_slice('B')[toMask] = int(b * 255)
+        A[:] = toMask * int(maskAlpha * 255)
+        self.logger.debug("CZW: Post alpha check.")
+        # CZW TODO: Figure out why this doesn't display.
+        return rgbaData
 
     def get_markers(self, x_colname='x', y_colname='y',
                     skycoord_colname='coord',
@@ -621,6 +694,7 @@ class ImageWidget(ipyw.VBox):
 
     def add_markers(self, table, x_colname='x', y_colname='y',
                     skycoord_colname='coord', use_skycoord=False,
+                    skipPositions=False,
                     marker_name=None):
         """
         Creates markers in the image at given points.
@@ -703,8 +777,9 @@ class ImageWidget(ipyw.VBox):
             self._viewer.canvas.delete_object_by_tag(marker_name)
 
         # TODO: Test to see if we can mix WCS and data on the same canvas
-        objs += [self._marker(x=x, y=y, coord=coord_type)
-                 for x, y in zip(coord_x, coord_y)]
+        if skipPositions is not True:
+            objs += [self._marker(x=x, y=y, coord=coord_type)
+                     for x, y in zip(coord_x, coord_y)]
         self._viewer.canvas.add(self.dc.CompoundObject(*objs),
                                 tag=marker_name)
 
