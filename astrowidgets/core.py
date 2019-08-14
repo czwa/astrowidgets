@@ -324,6 +324,87 @@ class ImageWidget(ipyw.VBox):
         """
         self._viewer.load_data(arr)
 
+    def load_lsst(self, exposure):
+        from ginga.util.wcsmod.wcs_astropy import AstropyWCS
+
+        class WcsAdaptorForGinga(AstropyWCS):
+            """A class to adapt the LSST Wcs class for Ginga"""
+
+            def __init__(self, wcs):
+                self._wcs = wcs
+
+            def pixtoradec(self, idxs, coords='data'):
+                """Return (ra, dec) in degrees given a position in pixels"""
+                ra, dec = self._wcs.pixelToSky(*idxs)
+
+                return ra.asDegrees(), dec.asDegrees()
+
+            def pixtosystem(self, idxs, system=None, coords='data'):
+                """I'm not sure if ginga really needs this; equivalent to self.pixtoradec()"""
+                return self.pixtoradec(idxs, coords=coords)
+
+            def radectopix(self, ra_deg, dec_deg, coords='data', naxispath=None):
+                """Return (x, y) in pixels given (ra, dec) in degrees"""
+                return self._wcs.skyToPixel(ra_deg*afwGeom.degrees, dec_deg*afwGeom.degrees)
+
+            def all_pix2world(self, *args, **kwargs):
+                out = []
+                print(f"{args}")
+                for pos in args[0]:
+                    r, d = self.pixtoradec(pos)
+                    out.append([r, d])
+                return tuple(out)
+
+            def datapt_to_wcspt(self, *args):
+                return (0.0, 0.0)
+
+            def wcspt_to_datapt(self, *args):
+                return (0.0, 0.0)
+
+        image = AstroImage(logger=self.logger, inherit_primary_header=True)
+        image.set_data(exposure.getImage().getArray())
+
+        if exposure.getMetadata():
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                headerDict = exposure.getMetadata().toDict()
+                headerDict.pop("COMMENT", "")  # Doesn't like comments?
+                image.update_keywords(headerDict)
+
+        if exposure.getWcs():
+            _wcs = AstropyWCS(self.logger)
+            image.lsst_wcs = WcsAdaptorForGinga(exposure.getWcs())
+            _wcs.pixtoradec = image.lsst_wcs.pixtoradec
+            _wcs.pixtosystem = image.lsst_wcs.pixtosystem
+            _wcs.radectopix = image.lsst_wcs.radectopix
+
+            image.set_wcs(_wcs)
+            image.wcs.wcs = image.lsst_wcs
+
+        self._viewer.set_image(image)
+
+        if exposure.getMask():
+            maskColorFromName = {'BAD': 'red',
+                                 'SAT': 'green',
+                                 'INTRP': 'green',
+                                 'CR': 'magenta',
+                                 'EDGE': 'yellow',
+                                 'DETECTED': 'blue',
+                                 'DETECTED_NEGATIVE': 'cyan',
+                                 'SUSPECT': 'yellow',
+                                 'NO_DATA': 'orange',
+                                 'CROSSTALK': None,
+                                 'UNMASKEDNAN': None}
+            maskDict = dict()
+            for plane, bit in exposure.getMask().getMaskPlaneDict().items():
+                color = maskColorFromName.get(plane, None)
+                if color:
+                    maskDict[1 << bit] = color
+            self.overlay_mask(exposure.getMask().getArray(), maskDict, 0.9)
+
+        if exposure.getWcs():
+            return _wcs
+
     def center_on(self, point):
         """
         Centers the view on a particular point.
@@ -394,6 +475,47 @@ class ImageWidget(ipyw.VBox):
 
         """
         self.zoom_level = self.zoom_level * val
+
+    def overlay_mask_value(self, maskImage, maskValue, maskColor, maskAlpha):
+        maskDict = {maskValue: maskColor}
+        self.overlay_mask(maskImage, maskDict, maskAlpha)
+
+    def overlay_mask(self, maskImage, maskDict, maskAlpha):
+        import numpy as np
+        from ginga.RGBImage import RGBImage
+        from ginga import colors
+
+        height, width = maskImage.shape
+        maskRGBA = np.zeros((height, width, 4), dtype=np.uint8)
+        nSet = np.zeros_like(maskImage, dtype=np.uint8)
+
+
+        for maskValue, maskColor in maskDict.items():
+            r, g, b = colors.lookup_color(maskColor)
+            isSet = (maskImage & maskValue) != 0
+            if (isSet == 0).all():
+                continue
+
+            maskRGBA[:, :, 0][isSet] = 255 * r
+            maskRGBA[:, :, 1][isSet] = 255 * g
+            maskRGBA[:, :, 2][isSet] = 255 * b
+
+            nSet[isSet] += 1
+
+        maskRGBA[:, :, 3][nSet == 0] = 0
+        maskRGBA[:, :, 3][nSet != 0] = 255 * maskAlpha
+
+        nSet[nSet == 0] = 1
+        for C in (0, 1, 2):
+            maskRGBA[:, :, C] //= nSet
+
+        rgb_img = RGBImage(data_np=maskRGBA)
+        Image = self._viewer.canvas.get_draw_class('image')
+        maskImageRGBA = Image(0, 0, rgb_img)
+
+        if "mask_overlay" in self._viewer.canvas.get_tags():
+            self._viewer.canvas.delete_object_by_tag("mask_overlay")
+        self._viewer.canvas.add(maskImageRGBA, tag="mask_overlay")
 
     @property
     def is_marking(self):
@@ -515,7 +637,7 @@ class ImageWidget(ipyw.VBox):
 
         """
         if marker_name is None:
-            marker_name = self._default_mark_tag_name
+            marker_name = 'all'
 
         if marker_name == 'all':
             # If it wasn't for the fact that SKyCoord columns can't
