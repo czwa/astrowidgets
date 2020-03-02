@@ -324,7 +324,7 @@ class ImageWidget(ipyw.VBox):
         """
         self._viewer.load_data(arr)
 
-    def load_lsst(self, exposure):
+    def load_lsst(self, exposure, useWCS=True):
         from ginga.util.wcsmod.wcs_astropy import AstropyWCS
 
         class WcsAdaptorForGinga(AstropyWCS):
@@ -371,7 +371,7 @@ class ImageWidget(ipyw.VBox):
                 headerDict.pop("COMMENT", "")  # Doesn't like comments?
                 image.update_keywords(headerDict)
 
-        if exposure.getWcs():
+        if exposure.getWcs() and useWCS:
             _wcs = AstropyWCS(self.logger)
             image.lsst_wcs = WcsAdaptorForGinga(exposure.getWcs())
             _wcs.pixtoradec = image.lsst_wcs.pixtoradec
@@ -402,7 +402,7 @@ class ImageWidget(ipyw.VBox):
                     maskDict[1 << bit] = color
             self.overlay_mask(exposure.getMask().getArray(), maskDict, 0.9)
 
-        if exposure.getWcs():
+        if exposure.getWcs() and useWCS:
             return _wcs
 
     def center_on(self, point):
