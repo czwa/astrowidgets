@@ -652,6 +652,10 @@ class ImageWidget(ipyw.VBox):
                                          y_colname=y_colname,
                                          skycoord_colname=skycoord_colname,
                                          marker_name=name)
+                if table is None:
+                    # No markers by this name, skip it
+                    continue
+
                 try:
                     coordinates.extend(c for c in table[skycoord_colname])
                 except KeyError:
@@ -667,11 +671,19 @@ class ImageWidget(ipyw.VBox):
 
             return stacked
 
+        # We should always allow the default name. The case
+        # where that table is empty will be handled in a moment.
+        if (marker_name not in self._marktags
+                and marker_name != self._default_mark_tag_name):
+            raise ValueError(f"No markers named '{marker_name}' found.")
+
         try:
             c_mark = self._viewer.canvas.get_object_by_tag(marker_name)
-        except Exception as e:  # No markers
-            self.logger.warning(str(e))
-            return
+        except Exception:
+            # No markers in this table. Issue a warning and continue
+            warnings.warn(f"Marker set named '{marker_name}' is empty",
+                          category=UserWarning)
+            return None
 
         image = self._viewer.get_image()
         xy_col = []
@@ -804,6 +816,11 @@ class ImageWidget(ipyw.VBox):
             coord_x, coord_y = image.wcs.wcs.all_world2pix(coord_val.ra.deg,
                                                            coord_val.dec.deg,
                                                            0)
+            # In the event a *single* marker has been added, coord_x and coord_y
+            # will be scalars. Make them arrays always.
+            if np.ndim(coord_x) == 0:
+                coord_x = np.array([coord_x])
+                coord_y = np.array([coord_y])
         else:  # Use X,Y
             coord_x = table[x_colname].data
             coord_y = table[y_colname].data
