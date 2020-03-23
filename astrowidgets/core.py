@@ -143,6 +143,7 @@ class ImageWidget(ipyw.VBox):
         # This needs ipyevents 0.3.1 to work
         self._viewer.add_callback('cursor-changed', self._mouse_move_cb)
         self._viewer.add_callback('cursor-down', self._mouse_click_cb)
+        self._viewer.add_callback('cursor-up', self._mouse_click_cb)
 
         # Define a callback that shows the output of a print
         self.print_out = ipyw.Output()
@@ -219,7 +220,7 @@ class ImageWidget(ipyw.VBox):
         """
         Callback to handle mouse clicks.
         """
-        if self.is_marking:
+        if self.is_marking and event == 'cursor-down':
             marker_name = self._interactive_marker_set_name
             objs = []
             try:
@@ -240,12 +241,15 @@ class ImageWidget(ipyw.VBox):
             with self.print_out:
                 print('Selected {} {}'.format(obj.x, obj.y))
 
-        elif self.click_center:
+        elif self.click_center and event == 'cursor-down':
             self.center_on((data_x, data_y))
 
             with self.print_out:
                 print('Centered on X={} Y={}'.format(data_x + self._pixel_offset,
                                                      data_y + self._pixel_offset))
+        else:
+            with self.print_out:
+                print('Click {} {}'.format(data_x, data_y))
 
 #     def _repr_html_(self):
 #         """
